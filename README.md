@@ -14,5 +14,5 @@ learn Sim2Rec
 
 ```gitignore
 cd lts/src
-python run_ae.py
+python run_lts.py
 ```
