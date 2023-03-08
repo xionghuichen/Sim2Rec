@@ -25,24 +25,24 @@ class VAE(object):
 
     def _init(self):
         def make_encoder(data, code_size, name='encoder'):
-            with tf.compat.v1.variable_scope(name, reuse=tf.compat.v1.AUTO_REUSE):
+            with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
                 # calculate multi gaussian: http://www.tina-vision.net/docs/memos/2003-003.pdf
                 # https://github.com/katerakelly/oyster/blob/cd09c1ae0e69537ca83004ca569574ea80cf3b9c/rlkit/torch/sac/agent.py#L10
-                with tf.compat.v1.variable_scope('emb'):
-                    x = tf.keras.layers.Flatten()(data)
-                    o_x = x = tf.keras.layers.Dense(self.hid_size, tf.nn.leaky_relu)(x)
+                with tf.variable_scope('emb'):
+                    x = tf.layers.flatten(data)
+                    o_x = x = tf.layers.dense(x, self.hid_size, tf.nn.leaky_relu)
                     for _ in range(self.hid_layers - 1):
-                        x = tf.keras.layers.Dense(self.hid_size)(x)
+                        x = tf.layers.dense(x, self.hid_size)
                         if self.layer_norm:
-                            x = tf.keras.layers.LayerNormalization(center=True, scale=True)(x)
+                            x = tf.contrib.layers.layer_norm(x, center=True, scale=True)
                         x = tf.nn.leaky_relu(x)
                     if self.res_struc:
                         x = o_x + x
-                locs = tf.keras.layers.Dense(code_size, name='loc')(x)
+                locs = tf.layers.dense(x, code_size, name='loc')
                 if self.constant_z_scale:
                     scales = locs * 0 + 1
                 else:
-                    scales = tf.keras.layers.Dense(code_size, tf.nn.softplus, name='scale')(x)
+                    scales = tf.layers.dense(x, code_size, tf.nn.softplus, name='scale')
                 # joint prob
                 scales_square = tf.square(scales) + 1e-7
                 scale_square = 1 / tf.reduce_sum(1 / scales_square, axis=-2)
@@ -60,22 +60,22 @@ class VAE(object):
 
 
         def make_decoder(code, data_shape, name='', ret_param=False):
-            with tf.compat.v1.variable_scope(name, reuse=tf.compat.v1.AUTO_REUSE):
+            with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
                 data_size = np.prod(data_shape)
                 # x = code
-                with tf.compat.v1.variable_scope('emb'):
+                with tf.variable_scope('emb'):
                     x = code
-                    o_x = x = tf.keras.layers.Dense(self.hid_size, tf.nn.leaky_relu)(x)
+                    o_x = x = tf.layers.dense(x, self.hid_size, tf.nn.leaky_relu)
                     for _ in range(self.hid_layers - 1):
-                        x = tf.keras.layers.Dense(self.hid_size)(x)
+                        x = tf.layers.dense(x, self.hid_size)
                         if self.layer_norm:
-                            x = tf.keras.layers.LayerNormalization(center=True, scale=True)(x)
+                            x = tf.contrib.layers.layer_norm(x, center=True, scale=True)
                         x = tf.nn.leaky_relu(x)
                     if self.res_struc:
                         x = x + o_x
 
-                    loc = tf.keras.layers.Dense(data_size, name='loc')(x)
-                    scale = tf.keras.layers.Dense(data_size, tf.nn.softplus, name='scale')(x)
+                    loc = tf.layers.dense(x, data_size, name='loc')
+                    scale = tf.layers.dense(x, data_size, tf.nn.softplus, name='scale')
                     loc = tf.reshape(loc, [-1] + data_shape)
                     scale = tf.reshape(scale, [-1] + data_shape)
                     distribution = tfd.MultivariateNormalDiag(loc, scale,
@@ -89,14 +89,14 @@ class VAE(object):
         def tensor_indices(data, indices):
             return tf.transpose(
                 tf.gather_nd(tf.transpose(data), indices=np.expand_dims(indices, axis=1), batch_dims=0, ))
-        with tf.compat.v1.variable_scope(self.name, reuse=tf.compat.v1.AUTO_REUSE):
+        with tf.variable_scope(self.name, reuse=tf.AUTO_REUSE):
             def safe_log(ops):
                 return tf.math.log(ops + 1e-6)
-            sample_number = tf.compat.v1.placeholder(tf.int32, [])
+            sample_number = tf.placeholder(tf.int32, [])
             make_gau_decoder = lambda code, data_shape, name='', ret_param=False: make_decoder(code, data_shape, name=name, ret_param=ret_param)
-            with tf.compat.v1.variable_scope('encode', reuse=tf.compat.v1.AUTO_REUSE):
+            with tf.variable_scope('encode', reuse=tf.AUTO_REUSE):
                 # Define the model.
-                data = tf.compat.v1.placeholder(tf.float32, [None, ] + self.x_shape, name='data_ph')
+                data = tf.placeholder(tf.float32, [None, ] + self.x_shape, name='data_ph')
                 prior = make_prior(code_size=self.z_size)
                 posterior = make_encoder(data, code_size=self.z_size)
                 code = posterior.sample()
@@ -105,9 +105,16 @@ class VAE(object):
                 # Define the loss.MultivariateNormalDiag
                 code = tf.expand_dims(code, 0)  # TODO: don't use expand_dims
                 divergence = tfd.kl_divergence(posterior, prior)
-                code_with_prior = tf.repeat(code, tf.shape(data)[0], axis=0)
-                code_mode_with_prior = tf.repeat(tf.expand_dims(posterior.mean(), 0), sample_number, axis=0)
-            with tf.compat.v1.variable_scope('decode', reuse=tf.compat.v1.AUTO_REUSE):
+                print('code.shape', code.shape)
+                print('code.dtype', code.dtype)
+                print('data.shape', data.shape)
+                print('data.dtype', data.dtype)
+                print('tf.shape(data)[0].shape', tf.shape(data)[0].shape)
+                #code_with_prior = tf.repeat(code, tf.shape(data)[0], axis=0)
+                code_with_prior = tf.tile(code, [tf.shape(data)[0], 1])
+                #code_mode_with_prior = tf.repeat(tf.expand_dims(posterior.mean(), 0), sample_number, axis=0)
+                code_mode_with_prior = tf.tile(tf.expand_dims(posterior.mean(), 0), [sample_number, 1])
+            with tf.variable_scope('decode', reuse=tf.AUTO_REUSE):
                 code_and_conditional = code_with_prior
                 code_mode_and_conditional = code_mode_with_prior
 
@@ -118,11 +125,11 @@ class VAE(object):
                 likelihood = safe_log(distribution.prob(data_input))
                 self.encode_samples = tf.reshape(make_gau_decoder(code_mode_and_conditional, index_len).sample(), [-1] + index_len)
                 self.likelihood = tf.reduce_sum(likelihood, axis=-1, keepdims=True)
-            with tf.compat.v1.variable_scope('loss', reuse=tf.compat.v1.AUTO_REUSE):
+            with tf.variable_scope('loss', reuse=tf.AUTO_REUSE):
                 self.elbo = elbo = tf.reduce_mean(tf.reduce_mean(self.likelihood) - tf.reduce_mean(divergence))
                 l2_vars = tf_util.get_trainable_vars(self.name)
                 self.l2_loss = tf.add_n([tf.nn.l2_loss(l2_var) for l2_var in l2_vars]) * self.l2_reg_coeff
-                optimize = tf.compat.v1.train.AdamOptimizer(self.lr).minimize(-1 * self.elbo + self.l2_loss)
+                optimize = tf.train.AdamOptimizer(self.lr).minimize(-1 * self.elbo + self.l2_loss)
             self.data = data
             self.divergence = divergence
             self.sample_number = sample_number

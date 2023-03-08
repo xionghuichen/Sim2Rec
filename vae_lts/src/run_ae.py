@@ -2,19 +2,48 @@ import argparse
 import sys
 
 sys.path.append('../../')
-from sklearn.decomposition import PCA
-import tensorflow as tf
-from baselines.common import set_global_seeds
-from stable_baselines.common import tf_util as U
-from stable_baselines.common.misc_util import boolean_flag
+
+from baselines.common import set_global_seeds, tf_util as U
+from baselines.common.misc_util import boolean_flag
 from common import logger
 from common.utils import *
 from common.config import *
+# from vae.src.private_config import *
 from common.tester import tester
 from vae_lts.src.vae_handler import VAE
 
 from lts.src.config import CHOC_BONUS_RANGE
+from common.private_config import *
+import logging
+from logging import handlers
 
+class Logger(object):
+    level_relations = {
+        'debug':logging.DEBUG,
+        'info':logging.INFO,
+        'warning':logging.WARNING,
+        'error':logging.ERROR,
+        'crit':logging.CRITICAL
+    }#日志级别关系映射
+
+    def __init__(self,filename,level='info',when='D',backCount=3,fmt='%(asctime)s - %(pathname)s[line:%(lineno)d] - %(levelname)s: %(message)s'):
+        self.logger = logging.getLogger(filename)
+        format_str = logging.Formatter(fmt)#设置日志格式
+        self.logger.setLevel(self.level_relations.get(level))#设置日志级别
+        sh = logging.StreamHandler()#往屏幕上输出
+        sh.setFormatter(format_str) #设置屏幕上显示的格式
+        th = handlers.TimedRotatingFileHandler(filename=filename,when=when,backupCount=backCount,encoding='utf-8')#往文件里写入#指定间隔时间自动生成文件的处理器
+        #实例化TimedRotatingFileHandler
+        #interval是时间间隔，backupCount是备份文件的个数，如果超过这个个数，就会自动删除，when是间隔的时间单位，单位有以下几种：
+        # S 秒
+        # M 分
+        # H 小时、
+        # D 天、
+        # W 每星期（interval==0时代表星期一）
+        # midnight 每天凌晨
+        th.setFormatter(format_str)#设置文件里写入的格式
+        self.logger.addHandler(sh) #把对象加到logger里
+        self.logger.addHandler(th)
 
 def argsparser():
     parser = argparse.ArgumentParser("Tensorflow Implementation of DEMER")
@@ -25,7 +54,7 @@ def argsparser():
     # parser.add_argument('--info', help='environment ID', default='')
     parser.add_argument('--seed', help='RNG seed', type=int, default=123)
     # data load setting
-    parser.add_argument('--trans_level', type=int, default=4)
+    parser.add_argument('--trans_level', type=int, default=2) #4
     # vae parameters
     parser.add_argument('--z_size', type=int, default=5)
     boolean_flag(parser, 'share_codes', default=True)
@@ -41,7 +70,7 @@ def argsparser():
     parser.add_argument('--gp_range', type=int, default=8)
     parser.add_argument('--std_level', type=int, default=3)
     parser.add_argument('--sample_user_num', type=int, default=100)
-    parser.add_argument('--lr', type=float, default=0.00002)
+    parser.add_argument('--lr', type=float, default=0.00000004) #0.00002, 0.0000004
     boolean_flag(parser, 'split_condition_predict', default=False)  # 丢弃参数
     boolean_flag(parser, 'layer_norm', default=True)
     boolean_flag(parser, 'weight_loss', default=False)  # 负面作用
@@ -58,7 +87,7 @@ def argsparser():
     parser.add_argument('--load_date', help='if provided, load the model', type=str, default='')
     parser.add_argument('--load_sub_proj', help='if provided, load the model', type=str, default='all-norm-hier_ae')
     parser.add_argument('--max_to_keep_save', help='save model every xx iterations', type=int, default=3)
-    parser.add_argument('--log_root', type=str, default='/home/pgao/sim2rec_private/log/')
+    parser.add_argument('--log_root', type=str, default=LOG_ROOT)
 
     args = parser.parse_args()
     kwargs = vars(args)
@@ -79,6 +108,7 @@ def argsparser():
 
 def main(args):
     from common.tester import tester
+    log = Logger('pca_components_energy.log', level='info')
     sess = U.make_session(num_cpu=16).__enter__()
     set_global_seeds(args.seed)
     task_name = tester.task_gen([ args.task])
@@ -157,8 +187,8 @@ def main(args):
                         code = vae.embedding(data_batch)
                         codes.append(code)
                     return codes
-                #from sklearn.decomposition import PCA
-                pca = PCA(n_components=2)
+                from sklearn.decomposition import PCA
+                pca = PCA(n_components=5)
                 test_codes = get_codes(test_data[0])
                 all_train_codes = []
                 for train_choc_mean in train_choc_mean_list:
@@ -173,11 +203,16 @@ def main(args):
                 # for codes in all_codes:
                 #     all_pca_codes.append(pca.transform(np.squeeze(codes)))
                 trans_codes_flat = pca.fit_transform(all_codes_flat)
-                trans_codes = trans_codes_flat.reshape((len(all_train_codes) + 1, code_sampling_num, 2))
+                print('pca.explained_variance_ratio_.shape', pca.explained_variance_ratio_.shape)
+                print('pca.explained_variance_ratio_', pca.explained_variance_ratio_)
+                if epoch % 200 == 0:
+                    log.logger.info(' pca.explained_variance_ratio_ in epoch {} is: {}'.format(epoch, pca.explained_variance_ratio_))
+                    
+                trans_codes = trans_codes_flat.reshape((len(all_train_codes) + 1, code_sampling_num, 5))
                 texts = [test_choc_mean] + train_choc_mean_list
                 datas = trans_codes
                 name = 'code/epoch-{}-pca_code'.format(epoch)
-                tester.simple_scatter(name, datas=datas, texts=texts, pretty=True, xlabel='pca dim 1', ylabel='pca dim 2')
+                #tester.simple_scatter(name, datas=datas, texts=texts, pretty=True, xlabel='pca dim 1', ylabel='pca dim 2')
 
 
             for choc in train_choc_mean_list:

@@ -8,9 +8,9 @@ import tensorflow as tf
 from common.config import *
 from common import logger
 from stable_baselines.common import explained_variance, ActorCriticRLModel, tf_util, SetVerbosity, TensorboardWriter
-#from lts.src.policies import RecurrentActorCriticPolicy, LstmPolicy
-from transfer_learning.src.policies import ActorCriticPolicy,RecurrentActorCriticPolicy, LstmPolicy
-from stable_baselines.a2c.utils import total_episode_reward_logger
+#from lts.src.policies import ActorCriticPolicy, RecurrentActorCriticPolicy, LstmPolicy
+from transfer_learning.src.policies import ActorCriticPolicy, RecurrentActorCriticPolicy, LstmPolicy, EnvAwarePolicy
+#from stable_baselines.a2c.utils import total_episode_reward_logger
 from common.tester import tester
 from common.utils import *
 from common.config import *
@@ -180,20 +180,21 @@ class PPO2(ActorCriticRLModel):
                 self.n_train_domains = 1
             self.n_batch = int(self.n_envs * self.n_steps * self.n_train_domains)
 
-            self.graph = tf.compat.v1.get_default_graph()
+            self.graph = tf.get_default_graph()
             self.observation_space = box_concate(self.observation_space, self.action_space)
             if self.vae_handler is not None:
                 assert isinstance(self.vae_handler, VAE)
                 self.vae_emb_size = self.vae_handler.z_size
             else:
                 self.vae_emb_size = 1
-            identity = np.ones(shape=(self.vae_emb_size,))
+            #identity = np.ones(shape=(self.vae_emb_size,))
+            identity = np.ones(shape=(self.observation_space.low.shape[0], self.vae_emb_size))
             vae_emb_space = gym.spaces.Box(low=identity * -10, high=identity * 10, dtype=np.float32, )
             self.observation_space = box_concate(self.observation_space, vae_emb_space)
             with self.graph.as_default():
-                with tf.compat.v1.variable_scope(self.name):
+                with tf.variable_scope(self.name):
                     if self.normalize_rew:
-                        with tf.compat.v1.variable_scope('rew_rms'):
+                        with tf.variable_scope('rew_rms'):
                             self.rew_rms = RunningMeanStd()
                     else:
                         self.rew_rms = None
@@ -203,12 +204,20 @@ class PPO2(ActorCriticRLModel):
                     n_batch_step = None
                     n_batch_train = None
                     # TODO: find this policy
-                    #assert issubclass(self.policy, LstmPolicy)
+                    """
+                    assert issubclass(self.policy, LstmPolicy)
                     assert self.n_envs % self.nminibatches == 0, "For recurrent policies, "\
                         "the number of environments run in parallel should be a multiple of nminibatches."
                     n_batch_step = self.n_envs
                     n_batch_train = self.n_batch // self.nminibatches
-
+                    """
+                    if issubclass(self.policy, LstmPolicy):
+                        assert self.n_envs % self.nminibatches == 0, "For recurrent policies, "\
+                        "the number of environments run in parallel should be a multiple of nminibatches."
+                        n_batch_step = self.n_envs
+                        n_batch_train = self.n_batch // self.nminibatches
+                    print('self.policy_kwargs', self.policy_kwargs)
+                    print('issubclass(self.policy, EnvAwarePolicy)', issubclass(self.policy, EnvAwarePolicy))
                     self.act_model = act_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
                                             n_batch_step, reuse=False, **self.policy_kwargs)
                     self.eval_model = {}
@@ -217,20 +226,20 @@ class PPO2(ActorCriticRLModel):
                         eval_model = self.policy(self.sess, self.observation_space, self.action_space, driver_number, 1,
                                                 n_batch_step, reuse=True, **self.policy_kwargs)
                         self.eval_model[domain] = eval_model
-                    with tf.compat.v1.variable_scope("train_model", reuse=True,
+                    with tf.variable_scope("train_model", reuse=True,
                                            custom_getter=tf_util.outer_scope_getter("train_model")):
                         self.train_model = train_model = self.policy(self.sess, self.observation_space, self.action_space,
                                                   self.n_envs * self.n_train_domains // self.nminibatches, self.n_steps, n_batch_train,
                                                   reuse=True, **self.policy_kwargs)
-                    with tf.compat.v1.variable_scope("loss", reuse=False):
+                    with tf.variable_scope("loss", reuse=False):
                         self.action_ph = train_model.pdtype.sample_placeholder([None], name="action_ph")
-                        self.advs_ph = tf.compat.v1.placeholder(tf.float32, [None], name="advs_ph")
-                        self.rewards_ph = tf.compat.v1.placeholder(tf.float32, [None], name="rewards_ph")
-                        self.old_neglog_pac_ph = tf.compat.v1.placeholder(tf.float32, [None], name="old_neglog_pac_ph")
-                        self.old_vpred_ph = tf.compat.v1.placeholder(tf.float32, [None], name="old_vpred_ph")
-                        self.v_learning_rate_ph = tf.compat.v1.placeholder(tf.float32, [], name="v_learning_rate_ph")
-                        self.p_learning_rate_ph = tf.compat.v1.placeholder(tf.float32, [], name="p_learning_rate_ph")
-                        self.clip_range_ph = tf.compat.v1.placeholder(tf.float32, [], name="clip_range_ph")
+                        self.advs_ph = tf.placeholder(tf.float32, [None], name="advs_ph")
+                        self.rewards_ph = tf.placeholder(tf.float32, [None], name="rewards_ph")
+                        self.old_neglog_pac_ph = tf.placeholder(tf.float32, [None], name="old_neglog_pac_ph")
+                        self.old_vpred_ph = tf.placeholder(tf.float32, [None], name="old_vpred_ph")
+                        self.v_learning_rate_ph = tf.placeholder(tf.float32, [], name="v_learning_rate_ph")
+                        self.p_learning_rate_ph = tf.placeholder(tf.float32, [], name="p_learning_rate_ph")
+                        self.clip_range_ph = tf.placeholder(tf.float32, [], name="clip_range_ph")
 
                         neglogpac = train_model.proba_distribution.neglogp(self.action_ph)
                         self.entropy = tf.reduce_mean(train_model.proba_distribution.entropy())
@@ -249,7 +258,7 @@ class PPO2(ActorCriticRLModel):
                         else:
                             # Last possible behavior: clipping range
                             # specific to the value function
-                            self.clip_range_vf_ph = tf.compat.v1.placeholder(tf.float32, [], name="clip_range_vf_ph")
+                            self.clip_range_vf_ph = tf.placeholder(tf.float32, [], name="clip_range_vf_ph")
 
                         if self.clip_range_vf_ph is None:
                             # No clipping
@@ -289,7 +298,7 @@ class PPO2(ActorCriticRLModel):
                         pg_loss_ent = self.pg_loss - self.entropy * self.ent_coef
 
                         # CGC constraint
-                        self.driver_param_cluster_ph = tf.compat.v1.placeholder(tf.int32, [None, None], name="driver_param_cluster_ph")
+                        self.driver_param_cluster_ph = tf.placeholder(tf.int32, [None, None], name="driver_param_cluster_ph")
 
                         def compute_sigma(driver_type_param):
                             i0 = tf.constant(0)
@@ -341,11 +350,11 @@ class PPO2(ActorCriticRLModel):
                         self.pi_cgc_loss = compute_cgc_loss(self.pi_sigma_within_mean, self.pi_sigma_between_mean)
                         self.v_cgc_loss = compute_cgc_loss(self.v_sigma_within_mean, self.v_sigma_between_mean)
 
-                        v_env_extractor_var = tf.compat.v1.trainable_variables(
-                            self.name + '/' + act_model.name + '/model/lstm_v') + tf.compat.v1.trainable_variables(
+                        v_env_extractor_var = tf.trainable_variables(
+                            self.name + '/' + act_model.name + '/model/lstm_v') + tf.trainable_variables(
                             self.name + '/' + act_model.name + '/model/vf_fc')
-                        pi_env_extractor_var = tf.compat.v1.trainable_variables(
-                            self.name + '/' + act_model.name + '/model/lstm_pi') + tf.compat.v1.trainable_variables(
+                        pi_env_extractor_var = tf.trainable_variables(
+                            self.name + '/' + act_model.name + '/model/lstm_pi') + tf.trainable_variables(
                             self.name + '/' + act_model.name + '/model/pi_fc')
 
                         def cgc_projection(input_loss, lda_loss, vars):
@@ -386,11 +395,11 @@ class PPO2(ActorCriticRLModel):
                         v_env_grads_with_cgc = cgc_projection(self.vf_loss, self.v_cgc_loss, v_env_extractor_var)
                         pi_env_grads_with_cgc = cgc_projection(pg_loss_ent, self.pi_cgc_loss, pi_env_extractor_var)
 
-                        with tf.compat.v1.variable_scope('model'):
-                            self.params = tf.compat.v1.trainable_variables()
+                        with tf.variable_scope('model'):
+                            self.params = tf.trainable_variables()
                             if self.full_tensorboard_log:
                                 for var in self.params:
-                                    tf.compat.v1.summary.histogram(var.name, var)
+                                    tf.summary.histogram(var.name, var)
                         pi_original_grads = tf.gradients(pg_loss_ent, self.params)
 
                         v_original_grads = tf.gradients(self.vf_loss, self.params)
@@ -427,7 +436,7 @@ class PPO2(ActorCriticRLModel):
                         v_grads = list(zip(v_grads, self.params))
 
                         # lda_grads = tf.gradients(lda_loss, env_extractor_var)
-                    with tf.compat.v1.variable_scope("loss_info", reuse=False):
+                    with tf.variable_scope("loss_info", reuse=False):
                         tf.summary.scalar('entropy_loss', self.entropy)
                         tf.summary.scalar('policy_gradient_loss', self.pg_loss)
                         tf.summary.scalar('value_function_loss1', tf.reduce_mean(vf_losses1))
@@ -439,14 +448,14 @@ class PPO2(ActorCriticRLModel):
                         tf.summary.scalar('_g_grad_norm', _p_grad_norm)
                         tf.summary.scalar('_v_grads_norm', _v_grads_norm)
 
-                    v_trainer = tf.compat.v1.train.AdamOptimizer(learning_rate=self.p_learning_rate_ph, epsilon=1e-5)
-                    g_trainer = tf.compat.v1.train.AdamOptimizer(learning_rate=self.v_learning_rate_ph, epsilon=1e-5)
+                    v_trainer = tf.train.AdamOptimizer(learning_rate=self.p_learning_rate_ph, epsilon=1e-5)
+                    g_trainer = tf.train.AdamOptimizer(learning_rate=self.v_learning_rate_ph, epsilon=1e-5)
                     self._g_train = g_trainer.apply_gradients(p_grads)
                     self._v_train = v_trainer.apply_gradients(v_grads)
                     # with tf.control_dependencies([self._g_train]):
                     self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
 
-                with tf.compat.v1.variable_scope("input_info", reuse=False):
+                with tf.variable_scope("input_info", reuse=False):
                     tf.summary.scalar('discounted_rewards', tf.reduce_mean(self.rewards_ph))
                     if self.normalize_rew:
                         tf.summary.scalar('rew_mean', self.rew_rms.mean)
@@ -477,7 +486,7 @@ class PPO2(ActorCriticRLModel):
                     env_param_mean_std = tf.nn.moments(env_param_mean, axes=0)[1]
                     scatter_of_driver = tf.reduce_mean(env_param_mean_std)
                     return scatter_of_driver, scatter_of_timestep
-                with tf.compat.v1.variable_scope("hidden_var", reuse=False):
+                with tf.variable_scope("hidden_var", reuse=False):
                     tf.summary.scalar('v_sigma_within_mean', self.v_sigma_within_mean)
                     tf.summary.scalar('v_sigma_between_mean', self.v_sigma_between_mean)
                     # sigma_within_mean, sigma_between_mean = compute_sigma(self.train_model.pi_rnn_output)
@@ -490,7 +499,7 @@ class PPO2(ActorCriticRLModel):
                     scatter_of_driver, scatter_of_timestep = compute_scatter(self.train_model.pi_rnn_output)
                     tf.summary.scalar('pi_scatter_of_driver', scatter_of_driver)
                     tf.summary.scalar('pi_scatter_of_timestep', scatter_of_timestep)
-                self.summary = tf.compat.v1.summary.merge_all()
+                self.summary = tf.summary.merge_all()
                 gradient_summary = []
                 gradient_summary.append(tf.summary.histogram('v_hidden_state', v_driver_type_param))
                 gradient_summary.append(tf.summary.histogram('p_hidden_state', p_driver_type_param))
@@ -500,25 +509,25 @@ class PPO2(ActorCriticRLModel):
                     v_grad, param = v_grads[i]
                     v_original_grad = v_original_grads[i]
                     if p_grad is not None:
-                        gradient_summary.append(tf.compat.v1.summary.histogram(str(param.name).replace('/', '-') + '/p_clip_grad', p_grad))
-                        gradient_summary.append(tf.compat.v1.summary.histogram(str(param.name).replace('/', '-') + '/p_grad', p_original_grad))
+                        gradient_summary.append(tf.summary.histogram(str(param.name).replace('/', '-') + '/p_clip_grad', p_grad))
+                        gradient_summary.append(tf.summary.histogram(str(param.name).replace('/', '-') + '/p_grad', p_original_grad))
                     if v_grad is not None:
-                        gradient_summary.append(tf.compat.v1.summary.histogram(str(param.name).replace('/', '-') + '/v_clip_grad', v_grad))
-                        gradient_summary.append(tf.compat.v1.summary.histogram(str(param.name).replace('/', '-') + '/v_grad', v_original_grad))
-                    gradient_summary.append(tf.compat.v1.summary.histogram(str(param.name).replace('/', '-') + '/var', param))
-                self.gradient_summary = tf.compat.v1.summary.merge(gradient_summary)
+                        gradient_summary.append(tf.summary.histogram(str(param.name).replace('/', '-') + '/v_clip_grad', v_grad))
+                        gradient_summary.append(tf.summary.histogram(str(param.name).replace('/', '-') + '/v_grad', v_original_grad))
+                    gradient_summary.append(tf.summary.histogram(str(param.name).replace('/', '-') + '/var', param))
+                self.gradient_summary = tf.summary.merge(gradient_summary)
 
-                self.rew_ph = tf.compat.v1.placeholder(tf.float32, [None], name="fos_ph")
-                self.acs_ph = tf.compat.v1.placeholder(tf.float32, [None], name="acs_ph")
-                self.satisfication_ph = tf.compat.v1.placeholder(tf.float32, [None], name="satisficiation_ph")
+                self.rew_ph = tf.placeholder(tf.float32, [None], name="fos_ph")
+                self.acs_ph = tf.placeholder(tf.float32, [None], name="acs_ph")
+                self.satisfication_ph = tf.placeholder(tf.float32, [None], name="satisficiation_ph")
                 self.domain_summary_dict = {}
                 for domain in self.all_domain_list:
-                    with tf.compat.v1.variable_scope("{}-distribution_info".format(domain), reuse=False):
+                    with tf.variable_scope("{}-distribution_info".format(domain), reuse=False):
                         domain_distribution_summary = []
-                        domain_distribution_summary.append(tf.compat.v1.summary.histogram('{}-rew'.format(domain), self.rew_ph))
-                        domain_distribution_summary.append(tf.compat.v1.summary.histogram('{}-acs'.format(domain), self.acs_ph))
-                        domain_distribution_summary.append(tf.compat.v1.summary.histogram('{}-satisficiation'.format(domain), self.satisfication_ph))
-                        self.domain_summary_dict[domain] = tf.compat.v1.summary.merge(domain_distribution_summary)
+                        domain_distribution_summary.append(tf.summary.histogram('{}-rew'.format(domain), self.rew_ph))
+                        domain_distribution_summary.append(tf.summary.histogram('{}-acs'.format(domain), self.acs_ph))
+                        domain_distribution_summary.append(tf.summary.histogram('{}-satisficiation'.format(domain), self.satisfication_ph))
+                        self.domain_summary_dict[domain] = tf.summary.merge(domain_distribution_summary)
 
 
                 self.proba_step = act_model.proba_step
@@ -591,8 +600,8 @@ class PPO2(ActorCriticRLModel):
         if writer is not None:
             # run loss backprop with summary, but once every 10 runs save the metadata (memory, compute time, ...)
             if self.full_tensorboard_log and (1 + update) % (self.log_interval * 2) == 0:
-                run_options = tf.compat.v1.RunOptions(trace_level=tf.compat.v1.RunOptions.FULL_TRACE)
-                run_metadata = tf.compat.v1.RunMetadata()
+                run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                run_metadata = tf.RunMetadata()
                 summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(
                     [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac,
                      self._v_train, self._g_train],

@@ -243,7 +243,7 @@ class TensorBoardOutputFormat(KVWriter):
         self.event_pb2 = event_pb2
         self.pywrap_tensorflow = pywrap_tensorflow
         self.last_log_time = time.time()
-        self.writer = tf.compat.v1.summary.FileWriter(path, max_queue=10000, flush_secs=FLU_FREQ,) # pywrap_tensorflow.EventsWriter(compat.as_bytes(path))
+        self.writer = tf.summary.FileWriter(path, max_queue=10000, flush_secs=FLU_FREQ,) # pywrap_tensorflow.EventsWriter(compat.as_bytes(path))
 
     def writekvs(self, kvs):
         def summary_val(k, v):

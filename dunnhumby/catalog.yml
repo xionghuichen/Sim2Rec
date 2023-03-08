@@ -1,0 +1,17 @@
+breakfast:
+    xlsx_fname: "dunnhumby.xlsx"
+    sheet_names: 
+        transactions: "dh Transaction Data"
+        products:     "dh Products Lookup"
+        store:        "dh Store Lookup"
+        glossary:     "Glossary"
+    output_dir:
+        dir: "data/processed/"
+        transactions: "transactions.csv"
+        products:     "products.csv"
+        store:        "store.csv"
+        glossary:     "glossary.csv" 
+        merged:       "merged_data.csv"
+    results:
+        dir: "data/results/"
+        sarima: "data/results/sarima_results.csv"

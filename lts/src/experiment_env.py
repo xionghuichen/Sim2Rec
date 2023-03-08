@@ -54,10 +54,6 @@ class Runner(AbstractEnvRunner):
         self.lam = lam
         self.gamma = gamma
         self.n_steps = n_steps
-        assert model.step != None
-        assert self.model.learn !=None
-        assert self.model.value != None 
-        assert self.model.step != None 
         self.horizon = horizon
         self.train_steps = train_steps
         self.states, self.dones, self.obs = {}, {}, {}
@@ -73,10 +69,11 @@ class Runner(AbstractEnvRunner):
         n_steps = self.n_steps
         env = self.env
         self.batch_ob_shape = (self.n_env*n_steps,) + env.observation_space.shape
+        print('self.n_env', self.n_env)
         self.dones[domain] = np.array([False for _ in range(self.n_env)])
         self.obs[domain] = obs
         self.states[domain] = self.model.initial_state
-        self.multi_epi_info[domain] = self.init_epi_info()
+        self.multi_epi_info[domain] = self.init_epi_info(domain)
         self.multi_ts[domain] = 0
 
     def run(self, epoch, domain=None, evaluation=EvaluationType.NO,
@@ -127,19 +124,22 @@ class Runner(AbstractEnvRunner):
                     self.log_epi_info(evaluation=evaluation)
                     obs = self.env.reset(domain=domain, evaluation=evaluation)
                     self.update_base_info(obs, domain)
-                print('test model.step callable', callable(self.model.step))
-                actions, values, self.states[domain], neglogpacs, policy_mean, policy_std = self.model.step(self.obs[domain], self.states[domain], self.dones[domain], deterministic=deterministic)
-                assert np.where(np.isnan(actions))[0].shape[0] == 0
+                print('self.dones[domain]', self.dones[domain])
+                actions, values, self.states[domain], neglogpacs, policy_mean, policy_std = self.model.step(self.obs[domain],
+                                                                           self.states[domain], self.dones[domain], deterministic=deterministic)
+                print('np.isnan(actions)', np.isnan(actions))
+                #assert np.where(np.isnan(actions))[0].shape[0] == 0
                 mb_obs.append(self.obs[domain].copy())
                 mb_actions.append(actions)
                 mb_values.append(values)
                 mb_neglogpacs.append(neglogpacs)
+                print('mb_dones', mb_dones)
                 mb_dones.append(self.dones[domain])
                 clipped_actions = actions
                 # Clip the actions to avoid out of bound error
                 if isinstance(self.env.action_space, gym.spaces.Box):
-                    clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
-                self.obs[domain][:], rewards, self.dones[domain], infos = self.env.step(clipped_actions)
+                    clipped_actions = np.clip(actions, self.env.action_space.low.T, self.env.action_space.high.T)
+                self.obs[domain][:], rewards, self.dones[domain], infos = self.env.step(clipped_actions.T)
                 self.append_log_info(mb_obs=self.obs[domain], mb_rewards=rewards, info=infos, acs=clipped_actions)
                 maybe_ep_info = infos.get('episode')
                 # if maybe_ep_info is not None:
@@ -165,6 +165,7 @@ class Runner(AbstractEnvRunner):
             mb_actions = np.asarray(mb_actions)
             mb_values = np.asarray(mb_values, dtype=np.float32)
             mb_neglogpacs = np.asarray(mb_neglogpacs, dtype=np.float32)
+            print('mb_dones', mb_dones)
             mb_dones = np.asarray(mb_dones, dtype=np.bool)
             last_values = self.model.value(self.obs[domain], self.states[domain], self.dones[domain])
             true_reward = np.copy(mb_rewards)
@@ -212,17 +213,23 @@ class Runner(AbstractEnvRunner):
         mb_returns = mb_advs + mb_values
         return mb_returns
 
-    def init_epi_info(self):
+    def init_epi_info(self, domain):
+        multidomain_env = self.env.env_dict
         return {
             "daily_rews": np.zeros([self.horizon, self.n_env]),
-            "daily_acs": np.zeros([self.horizon, self.n_env]),
+            "daily_acs": np.zeros([self.horizon, self.n_env, multidomain_env[domain].env._environment.num_product]),
             "daily_satisfication": np.zeros([self.horizon, self.n_env]),
         }
 
     def append_log_info(self, mb_rewards, mb_obs, acs, info):
+        print('mb_rewards.shape', mb_rewards.shape)
+        print('acs.shape', acs.shape)
         self.multi_epi_info[self.domain]['daily_rews'][self.multi_ts[self.domain]] = mb_rewards
-        self.multi_epi_info[self.domain]['daily_acs'][self.multi_ts[self.domain]] = np.squeeze(acs)
-        self.multi_epi_info[self.domain]['daily_satisfication'][self.multi_ts[self.domain]] = info['hidden_state'][:, self.env.hd_feature.index('satisfication')]
+        print('acs.shape', acs.shape)
+        print('self.multi_epi_info[self.domain][daily_acs][self.multi_ts[self.domain]]', self.multi_epi_info[self.domain]['daily_acs'][self.multi_ts[self.domain]])
+        self.multi_epi_info[self.domain]['daily_acs'][self.multi_ts[self.domain]] = acs
+        #self.multi_epi_info[self.domain]['daily_satisfication'][self.multi_ts[self.domain]] = info['hidden_state'][:, self.env.hd_feature.index('satisfication')]
+        self.multi_epi_info[self.domain]['daily_satisfication'][self.multi_ts[self.domain]] = None
 
     def log_epi_info(self, evaluation):
         if evaluation == EvaluationType.NO:
@@ -256,7 +263,7 @@ class Runner(AbstractEnvRunner):
                     logger.info("better performance: {} > {}".format(perf, self.last_best_rew))
                     tester.save_checkpoint(self.epoch)
                     self.last_best_rew = perf
-        logger.dump_tabular()
+        #logger.dump_tabular()
 
 class SimpleEnvAwareRunner(Runner):
     def __init__(self, *args, **kwargs):
@@ -274,7 +281,7 @@ class SimpleEnvAwareRunner(Runner):
         self.pi_states[domain] = np.zeros((self.env.current_num_envs, self.model.initial_state.shape[1]))
         self.v_states[domain] = np.zeros((self.env.current_num_envs, self.model.initial_state.shape[1]))
         self.vae_emb[domain] = np.zeros((self.env.current_num_envs, self.model.vae_emb_size))
-        self.multi_epi_info[domain] = self.init_epi_info()
+        self.multi_epi_info[domain] = self.init_epi_info(domain)
 
         self.multi_ts[domain] = 0
 

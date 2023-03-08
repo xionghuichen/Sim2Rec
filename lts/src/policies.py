@@ -33,8 +33,8 @@ def lstm(input_tensor, mask_tensor, cell_state_hidden, scope, n_hidden, init_sca
     """
     _, n_input = [v.value for v in input_tensor[0].get_shape()]
     with tf.variable_scope(scope):
-        weight_x = tf.get_variable("wx", [n_input, n_hidden * 4], initializer=ortho_init(init_scale))
-        weight_h = tf.get_variable("wh", [n_hidden, n_hidden * 4], initializer=ortho_init(init_scale))
+        weight_x = tf.get_variable("wx", [n_input, n_hidden * 4], initializer=tf.orthogonal_initializer(init_scale))
+        weight_h = tf.get_variable("wh", [n_hidden, n_hidden * 4], initializer=tf.orthogonal_initializer(init_scale))
         bias = tf.get_variable("b", [n_hidden * 4], initializer=tf.constant_initializer(0.0))
 
         if layer_norm:
@@ -51,7 +51,7 @@ def lstm(input_tensor, mask_tensor, cell_state_hidden, scope, n_hidden, init_sca
     cell_state, hidden = tf.split(axis=1, num_or_size_splits=2, value=cell_state_hidden)
     for idx, (_input, mask) in enumerate(zip(input_tensor, mask_tensor)):
         if dropout:
-            _input = tf.keras.layers.Dropout(rate=0.5)(_input)
+            _input = tf.layers.dropout(_input, rate=0.5)
         cell_state = cell_state * (1 - mask)
         hidden = hidden * (1 - mask)
         if layer_norm:
@@ -70,10 +70,70 @@ def lstm(input_tensor, mask_tensor, cell_state_hidden, scope, n_hidden, init_sca
         else:
             hidden = out_gate * tf.tanh(cell_state)
         if dropout:
-            hidden = tf.keras.layers.Dropout(rate=0.5)(hidden)
+            hidden = tf.layers.dropout(hidden, rate=0.5)
         input_tensor[idx] = hidden
     cell_state_hidden = tf.concat(axis=1, values=[cell_state, hidden]) # last state?
     return input_tensor, cell_state_hidden
+
+
+def res_lstm(input_tensor, mask_tensor, cell_state_hidden, scope, n_hidden, init_scale=1.0, layer_norm=False, use_resnet=False,
+             consistent_ecoff=0):
+    """
+    Creates an Long Short Term Memory (LSTM) cell for TensorFlow
+
+    :param input_tensor: (TensorFlow Tensor) The input tensor for the LSTM cell
+    :param mask_tensor: (TensorFlow Tensor) The mask tensor for the LSTM cell
+    :param cell_state_hidden: (TensorFlow Tensor) The state tensor for the LSTM cell
+    :param scope: (str) The TensorFlow variable scope
+    :param n_hidden: (int) The number of hidden neurons
+    :param init_scale: (int) The initialization scale
+    :param layer_norm: (bool) Whether to apply Layer Normalization or not
+    :return: (TensorFlow Tensor) LSTM cell
+    """
+    _, n_input = [v.value for v in input_tensor[0].get_shape()]
+    with tf.variable_scope(scope):
+        weight_x = tf.get_variable("wx", [n_input, n_hidden * 4], initializer=ortho_init(init_scale))
+        weight_h = tf.get_variable("wh", [n_hidden, n_hidden * 4], initializer=ortho_init(init_scale))
+        bias = tf.get_variable("b", [n_hidden * 4], initializer=tf.constant_initializer(0.0))
+
+        if layer_norm:
+            # Gain and bias of layer norm
+            gain_x = tf.get_variable("gx", [n_hidden * 4], initializer=tf.constant_initializer(1.0))
+            bias_x = tf.get_variable("bx", [n_hidden * 4], initializer=tf.constant_initializer(0.0))
+
+            gain_h = tf.get_variable("gh", [n_hidden * 4], initializer=tf.constant_initializer(1.0))
+            bias_h = tf.get_variable("bh", [n_hidden * 4], initializer=tf.constant_initializer(0.0))
+
+            gain_c = tf.get_variable("gc", [n_hidden], initializer=tf.constant_initializer(1.0))
+            bias_c = tf.get_variable("bc", [n_hidden], initializer=tf.constant_initializer(0.0))
+
+        cell_state, hidden = tf.split(axis=1, num_or_size_splits=2, value=cell_state_hidden)
+        last_hidden = hidden
+        for idx, (_input, mask) in enumerate(zip(input_tensor, mask_tensor)):
+            cell_state = cell_state * (1 - mask)
+            hidden = hidden * (1 - mask)
+            if layer_norm:
+                gates = _ln(tf.matmul(_input, weight_x), gain_x, bias_x) \
+                        + _ln(tf.matmul(hidden, weight_h), gain_h, bias_h) + bias
+            else:
+                gates = tf.matmul(_input, weight_x) + tf.matmul(hidden, weight_h) + bias
+            in_gate, forget_gate, out_gate, cell_candidate = tf.split(axis=1, num_or_size_splits=4, value=gates)
+            in_gate = tf.nn.sigmoid(in_gate)
+            forget_gate = tf.nn.sigmoid(forget_gate)
+            out_gate = tf.nn.sigmoid(out_gate)
+            cell_candidate = tf.tanh(cell_candidate)
+            cell_state = forget_gate * cell_state + in_gate * cell_candidate
+            if layer_norm:
+                # cell_state = tf.contrib.layers.layer_norm(cell_state, center=True, scale=True)
+                hidden = out_gate * tf.tanh(_ln(cell_state, gain_c, bias_c))
+            else:
+                hidden = out_gate * tf.tanh(cell_state)
+            if use_resnet:
+                hidden = hidden + consistent_ecoff * last_hidden
+                last_hidden = hidden
+            input_tensor[idx] = hidden
+        cell_state_hidden = tf.concat(axis=1, values=[cell_state, hidden]) # last state?
+        return input_tensor, cell_state_hidden
 
 
 def nature_cnn(scaled_images, **kwargs):
@@ -199,16 +259,19 @@ class BasePolicy(ABC):
         self.n_env = n_env
         self.n_steps = n_steps
         self.n_batch = n_batch
-        with tf.compat.v1.variable_scope("input", reuse=False):
+
+        with tf.variable_scope("input", reuse=False):
             if obs_phs is None:
                 self._obs_ph, self._processed_obs = observation_input(ob_space, n_batch, scale=scale)
+                print('self._obs_ph', self._obs_ph)
             else:
                 self._obs_ph, self._processed_obs = obs_phs
 
             self._action_ph = None
             if add_action_ph:
-                self._action_ph = tf.compat.v1.placeholder(dtype=ac_space.dtype, shape=(n_batch,) + ac_space.shape,
+                self._action_ph = tf.placeholder(dtype=ac_space.dtype, shape=(n_batch,) + ac_space.shape,
                                                  name="action_ph")
+
         self.sess = sess
         self.reuse = reuse
         self.ob_space = ob_space
@@ -307,7 +370,7 @@ class ActorCriticPolicy(BasePolicy):
 
     def _setup_init(self):
         """Sets up the distributions, actions, and value."""
-        with tf.compat.v1.variable_scope("output", reuse=True):
+        with tf.variable_scope("output", reuse=True):
             assert self.policy is not None and self.proba_distribution is not None and self.value_fn is not None
             self._action = self.proba_distribution.sample()
             self._deterministic_action = self.proba_distribution.mode()
@@ -420,8 +483,8 @@ class RecurrentActorCriticPolicy(ActorCriticPolicy):
         super(RecurrentActorCriticPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps,
                                    n_batch, reuse=reuse, scale=scale, *args, **kwargs)
 
-        with tf.compat.v1.variable_scope("input", reuse=False):
-            self._dones_ph = tf.compat.v1.placeholder(tf.float32, (n_batch, ), name="dones_ph")  # (done t-1)
+        with tf.variable_scope("input", reuse=False):
+            self._dones_ph = tf.placeholder(tf.float32, (n_batch, ), name="dones_ph")  # (done t-1)
             # state_ph_shape = (self.n_env, ) + tuple(state_shape)
             # self._states_ph = tf.placeholder(tf.float32, state_ph_shape, name="states_ph")
 
@@ -485,24 +548,24 @@ class LstmPolicy(RecurrentActorCriticPolicy):
         self.stop_critic_gradient = stop_critic_gradient
         self.no_share_layer = no_share_layer
         state_ph_shape = (self.n_env,) + tuple((2 * n_lstm, ))
-        with tf.compat.v1.variable_scope("input", reuse=False):
+        with tf.variable_scope("input", reuse=False):
             if self.no_share_layer:
-                self.pi_states_ph = tf.compat.v1.placeholder(tf.float32, state_ph_shape, name="pi_states_ph")
-                self.v_states_ph = tf.compat.v1.placeholder(tf.float32, state_ph_shape, name="v_states_ph")
+                self.pi_states_ph = tf.placeholder(tf.float32, state_ph_shape, name="pi_states_ph")
+                self.v_states_ph = tf.placeholder(tf.float32, state_ph_shape, name="v_states_ph")
             else:
-                self.pi_states_ph = self.v_states_ph = tf.compat.v1.placeholder(tf.float32, state_ph_shape, name="states_ph")
-        with tf.compat.v1.variable_scope(self.name, reuse=reuse):
+                self.pi_states_ph = self.v_states_ph = tf.placeholder(tf.float32, state_ph_shape, name="states_ph")
+        with tf.variable_scope(self.name, reuse=reuse):
             if net_arch is None:  # Legacy mode
                 if layers is None:
                     layers = [64, 64]
                 else:
                     warnings.warn("The layers parameter is deprecated. Use the net_arch parameter instead.")
 
-                with tf.compat.v1.variable_scope("model", reuse=reuse):
+                with tf.variable_scope("model", reuse=reuse):
                     if feature_extraction == "cnn":
                         extracted_features = cnn_extractor(self.processed_obs, **kwargs)
                     else:
-                        extracted_features = tf.keras.layers.Flatten()(self.processed_obs)
+                        extracted_features = tf.layers.flatten(self.processed_obs)
                         net_arch = [dict(vf=layers, pi=layers)]
                         if self.no_share_layer:
                             if oc:
@@ -551,7 +614,7 @@ class LstmPolicy(RecurrentActorCriticPolicy):
                         if redun_info:
                             pi_latent = tf.concat([self.processed_obs, pi_rnn_output], axis=-1)
                             vf_latent = tf.concat([self.processed_obs, v_rnn_output], axis=-1)
-                        with tf.compat.v1.variable_scope("post", reuse=reuse):
+                        with tf.variable_scope("post", reuse=reuse):
                             pi_latent, vf_latent = mlp_extractor(pi_latent, post_net_arch, act_fun,
                                                                  ln=layer_norm, res_net=False, latent_value=vf_latent)
 
@@ -614,7 +677,7 @@ class FeedForwardPolicy(ActorCriticPolicy):
         self.res_net = res_net
         self.layer_norm = layer_norm
         self.initial_state = np.array([None])
-        with tf.compat.v1.variable_scope(self.name, reuse=reuse):
+        with tf.variable_scope(self.name, reuse=reuse):
             if layers is not None:
                 warnings.warn("Usage of the `layers` parameter is deprecated! Use net_arch instead "
                               "(it has a different semantics though).", DeprecationWarning)
@@ -627,11 +690,11 @@ class FeedForwardPolicy(ActorCriticPolicy):
                     layers = [64, 64]
                 net_arch = [dict(vf=layers, pi=layers)]
 
-            with tf.compat.v1.variable_scope("model", reuse=reuse):
+            with tf.variable_scope("model", reuse=reuse):
                 if feature_extraction == "cnn":
                     pi_latent = vf_latent = cnn_extractor(self.processed_obs, **kwargs)
                 else:
-                    pi_latent, vf_latent = mlp_extractor(tf.keras.layers.Flatten()(self.processed_obs), net_arch, act_fun,
+                    pi_latent, vf_latent = mlp_extractor(tf.layers.flatten(self.processed_obs), net_arch, act_fun,
                                                          ln=self.layer_norm, res_net=self.res_net)
 
                 self._value_fn = linear(vf_latent, 'vf', 1)
@@ -643,6 +706,7 @@ class FeedForwardPolicy(ActorCriticPolicy):
             self._setup_init()
 
     def step(self, obs, state=None, mask=None, deterministic=False):
+        obs = np.expand_dims(obs, axis=0)
         if deterministic:
             action, value, neglogp = self.sess.run([self.deterministic_action, self.value_flat, self.neglogp],
                                                    {self.obs_ph: obs})
@@ -652,10 +716,71 @@ class FeedForwardPolicy(ActorCriticPolicy):
         return action, value, self.initial_state, neglogp
 
     def proba_step(self, obs, state=None, mask=None):
+        obs = np.expand_dims(obs, axis=0)
         return self.sess.run(self.policy_proba, {self.obs_ph: obs})
 
     def value(self, obs, state=None, mask=None):
+        obs = np.expand_dims(obs, axis=0)
         return self.sess.run(self.value_flat, {self.obs_ph: obs})
+
+
+class CnnPolicy(FeedForwardPolicy):
+    """
+    Policy object that implements actor critic, using a CNN (the nature CNN)
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param reuse: (bool) If the policy is reusable or not
+    :param _kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse=False, **_kwargs):
+        super(CnnPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
+                                        feature_extraction="cnn", **_kwargs)
+
+
+class CnnLstmPolicy(LstmPolicy):
+    """
+    Policy object that implements actor critic, using LSTMs with a CNN feature extraction
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param n_lstm: (int) The number of LSTM cells (for recurrent policies)
+    :param reuse: (bool) If the policy is reusable or not
+    :param kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm=256, reuse=False, **_kwargs):
+        super(CnnLstmPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm, reuse,
+                                            layer_norm=False, feature_extraction="cnn", **_kwargs)
+
+
+class CnnLnLstmPolicy(LstmPolicy):
+    """
+    Policy object that implements actor critic, using a layer normalized LSTMs with a CNN feature extraction
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param n_lstm: (int) The number of LSTM cells (for recurrent policies)
+    :param reuse: (bool) If the policy is reusable or not
+    :param kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm=256, reuse=False, **_kwargs):
+        super(CnnLnLstmPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm, reuse,
+                                              layer_norm=True, feature_extraction="cnn", **_kwargs)
 
 
 class MlpPolicy(FeedForwardPolicy):
@@ -677,10 +802,54 @@ class MlpPolicy(FeedForwardPolicy):
                                         feature_extraction="mlp", **_kwargs)
 
 
+class MlpLstmPolicy(LstmPolicy):
+    """
+    Policy object that implements actor critic, using LSTMs with a MLP feature extraction
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param n_lstm: (int) The number of LSTM cells (for recurrent policies)
+    :param reuse: (bool) If the policy is reusable or not
+    :param kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm=256, reuse=False, **_kwargs):
+        super(MlpLstmPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm, reuse,
+                                            layer_norm=False, feature_extraction="mlp", **_kwargs)
+
+
+class MlpLnLstmPolicy(LstmPolicy):
+    """
+    Policy object that implements actor critic, using a layer normalized LSTMs with a MLP feature extraction
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param n_lstm: (int) The number of LSTM cells (for recurrent policies)
+    :param reuse: (bool) If the policy is reusable or not
+    :param kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm=256, reuse=False, **_kwargs):
+        super(MlpLnLstmPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm, reuse,
+                                              layer_norm=True, feature_extraction="mlp", **_kwargs)
+
 
 _policy_registry = {
     ActorCriticPolicy: {
+        "CnnPolicy": CnnPolicy,
+        "CnnLstmPolicy": CnnLstmPolicy,
+        "CnnLnLstmPolicy": CnnLnLstmPolicy,
         "MlpPolicy": MlpPolicy,
+        "MlpLstmPolicy": MlpLstmPolicy,
+        "MlpLnLstmPolicy": MlpLnLstmPolicy,
     }
 }
 

@@ -25,7 +25,6 @@ import numpy as np
 from lts.src import environment
 from common import logger
 from lts.src.config import *
-from stable_baselines.common.vec_env.base_vec_env import VecEnv
 
 def _dummy_metrics_aggregator(responses, metrics, info):
     del responses  # Unused.
@@ -201,6 +200,7 @@ class RecSimGymEnv(gym.Env):
         self._metrics_writer(self._metrics, add_summary_fn)
 
 
+from stable_baselines.common.vec_env.base_vec_env import VecEnv
 
 
 class RecSimGymEnvFlat(RecSimGymEnv):
@@ -254,11 +254,7 @@ class RecSimGymEnvFlat(RecSimGymEnv):
         merge_obs = np.array(merge_obs)
         return merge_obs
 
-    #def reset(self, domain, evaluation):
-    #    obs_dict = super(RecSimGymEnvFlat, self).reset()
-    #    return self._dict_to_flat_feature(obs_dict)
-
-    def reset(self):
+    def reset(self, domain, evaluation):
         obs_dict = super(RecSimGymEnvFlat, self).reset()
         return self._dict_to_flat_feature(obs_dict)
 
@@ -298,7 +294,7 @@ class RecSimGymEnvVec(VecEnv):
         self.domain = domain_name
         self.time_budget = env._environment.user_model[0]._user_state.time_budget
         self.hd_feature = env._environment.user_model[0]._user_state.hd_list
-        super(RecSimGymEnvVec, self).__init__(env._environment.num_users, env.observation_space, env.action_space)
+        super(RecSimGymEnvVec, self).__init__(1, env.observation_space, env.action_space)
         self.current_num_envs = self.num_envs
     def set_attr(self, attr_name, value, indices=None):
         raise NotImplementedError
@@ -306,14 +302,14 @@ class RecSimGymEnvVec(VecEnv):
     def need_reset(self, domain):
         return self.env.need_reset(domain)
 
-    def seed(self, seed = None):
-        return self.env.seed(seed)
-
     def change_domain(self, domain_name):
         print("do nothing for change domain")
 
     def step_wait(self):
         raise NotImplementedError
+    
+    def seed(self, seed = None):
+        return self.env.seed(seed)
 
     def env_method(self, method_name, *method_args, indices=None, **method_kwargs):
         raise NotImplementedError
@@ -396,12 +392,12 @@ class MultiDomainGymEnv(VecEnv):
     def hd_feature(self):
         return self.selected_env.hd_feature
 
-    def seed(self, seed = None):
-        return self.selected_env.seed(seed)
-
     def change_domain(self, domain_name):
         self.selected_env = self.env_dict[domain_name]
         self.current_num_envs = self.selected_env.num_envs
+    
+    def seed(self, seed = None):
+        return self.selected_env.seed(seed)
 
     def set_attr(self, attr_name, value, indices=None):
         raise NotImplementedError
@@ -426,7 +422,7 @@ class MultiDomainGymEnv(VecEnv):
 
     def reset(self, domain, evaluation, *args, **kwargs):
         self.change_domain(domain)
-        return self.selected_env.reset(*args, **kwargs)
+        return self.selected_env.reset(domain, evaluation, *args, **kwargs)
 
     def step(self, action, *args, **kwargs):
         return self.selected_env.step(action, *args, **kwargs)

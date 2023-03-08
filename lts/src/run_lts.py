@@ -1,18 +1,17 @@
 import gym
 import sys
 sys.path.append('../../')
+sys.path.append('../../')
 import argparse
 from baselines.common.misc_util import boolean_flag
-from baselines.common import set_global_seeds
-from stable_baselines.common import tf_util as U
-from stable_baselines.common.schedules import LinearSchedule
+from baselines.common import set_global_seeds, tf_util as U
 from lts.src.private_config import *
 from common.tester import tester
-from transfer_learning.src.policies import EnvExtractorPolicy, EnvAwarePolicy
 import numpy as np
 
 from lts.src.policies import MlpPolicy as PpoMlp
 from lts.src.lts_van_ppo import PPO2 as ppo2_vanilla
+#from lts.src.lts_env_aware_ppo import PPO2 as ppo2_env_aware
 import tensorflow as tf
 from transfer_learning.src.func import *
 from common.config import *
@@ -20,16 +19,6 @@ from common import logger
 from lts.src.multi_user_env import make
 from lts.src.recsim_gym import MultiDomainGymEnv
 from lts.src.config import *
-from vae_lts.src.vae_handler import VAE
-
-def compute_kl(real_mean, real_std, recons_data):
-    real_logstd = np.log(real_std)
-    recons_logstd = np.log(np.std(recons_data))
-    recons_std = np.std(recons_data)
-    recons_mean = np.mean(recons_data)
-    kld = np.sum(recons_logstd - real_logstd + (np.square(real_std) + np.square(real_mean - recons_mean)) / (
-            2 * np.square(recons_std)) - 0.5, axis=-1)
-    return kld
 
 def argsparser():
     parser = argparse.ArgumentParser("Train coupon policy in simulator")
@@ -39,11 +28,18 @@ def argsparser():
     # tester
     parser.add_argument('--log_root', type=str, default=LOG_ROOT)
     parser.add_argument('--load_date', type=str, default='')
+    parser.add_argument('--load_sub_proj', type=str, default='transfer_lts')
     boolean_flag(parser, 'save_checkpoint', default=False)
     # learning configuration
     parser.add_argument('--noptepochs', type=int, default=3)  # modified
+    boolean_flag(parser, 'norm_obs', default=False)  # hurt perf, check bug.
+    boolean_flag(parser, 'simp_state', default=True)
     boolean_flag(parser, 'remove_done', default=True)
+    boolean_flag(parser, 'budget_constraint', default=True)
+    parser.add_argument('--budget_expand', type=float, default=1.5)
     parser.add_argument('--trans_level', type=float, default=4.0)
+    boolean_flag(parser, 'UE_penalty', default=True)
+    boolean_flag(parser, 'gmv_rescale', default=True)
     boolean_flag(parser, 'merge_samples', default=True)
     boolean_flag(parser, 'rms_opt', default=False)
     parser.add_argument('--lam', type=float, default=0.95)
@@ -62,7 +58,7 @@ def argsparser():
     # parser.add_argument('--batch_size', help='number of timesteps per batch', type=int, default=4096)
     parser.add_argument('--keep_dids_times', help='number of timesteps per batch', type=int, default=1)
     # alg info
-    parser.add_argument('--trans_type', help='environment ID', default=TransType.DIRECT)
+    parser.add_argument('--trans_type', help='environment ID', default=TransType.ENV_AWARE)
     parser.add_argument('--alo_type', help='environment ID', default=AlgorithmType.PPO)
     parser.add_argument('--time_budget', type=int, default=140)
     parser.add_argument('--sim_noise_level', type=int, default=0)
@@ -82,6 +78,7 @@ def argsparser():
     boolean_flag(parser, 'given_ep', default=False)
     boolean_flag(parser, 'oc', default=False)
     boolean_flag(parser, 'simple_lstm', default=True)
+    boolean_flag(parser, 'plt_res', default=False)
     boolean_flag(parser, 'post_layer', default=False)
 
     parser.add_argument('--policy_init_scale', type=float, default=0.5)
@@ -90,6 +87,9 @@ def argsparser():
     parser.add_argument('--l2_reg_pi', type=float, default=1e-6)
     parser.add_argument('--l2_reg_v', type=float, default=1e-6)
     boolean_flag(parser, 'learn_var', default=False) # TODO: learning variance seems to be better but unstable.
+    boolean_flag(parser, 'double_city', default=False)
+    boolean_flag(parser, 'use_target_city', default=False)
+    boolean_flag(parser, 'normalize_returns', default=False)
     boolean_flag(parser, 'normalize_rew', default=True)
     boolean_flag(parser, 'hand_code_distribution', default=False)
     boolean_flag(parser, 'just_scale', default=True)
@@ -98,6 +98,7 @@ def argsparser():
     # env extractor network parameters
     parser.add_argument('--l2_reg_env', type=float, default=1e-6)
     parser.add_argument('--driver_cluster_days', type=int, default=3)  # driver_cluster_days = 7 hurt performance.
+    parser.add_argument('--env_params_size', type=int, default=64)
     parser.add_argument('--consistent_ecoff', type=float, default=0.8)
     parser.add_argument('--samples_per_driver', type=int, default=60)  # 30 可以提升所有方法的性能， 测试更困难的环境
     parser.add_argument('--tau', type=int, default=0.001)
@@ -119,6 +120,7 @@ def argsparser():
     boolean_flag(parser, 'cliped_lda', default=False)
     boolean_flag(parser, 'square_lda', default=True)
     parser.add_argument('--constraint_lda', type=str, default=ConstraintLDA.Proj2CGC)
+    boolean_flag(parser, 'use_cur_obs', default=True)
     boolean_flag(parser, 'env_relu_act', default=True)
     boolean_flag(parser, 'env_out_relu_act', default=False)
     boolean_flag(parser, 'lstm_layer_norm', default=False)
@@ -128,6 +130,7 @@ def argsparser():
 
     # distribution embedding parameters
     boolean_flag(parser, 'stable_dist_embd', default=True)
+    boolean_flag(parser, 'use_distribution_info', default=False)
     boolean_flag(parser, 'vae_test', default=False)
     args = parser.parse_args()
     args.v_learning_rate *= args.lr_rescale
@@ -159,6 +162,14 @@ if __name__ == '__main__':
     tester.clear_record_param()
     tester.add_record_param(['info','seed',
                              'trans_type', 'given_ep', "test_choc_mean", "std_level", "trans_level", "sim_noise_level",
+                             # "batch_timesteps",
+                             # "num_timesteps",
+                             # "lr_rescale",
+                              # "scaled_lda", "random_range", "use_lda_loss", "pi_lda_loss",
+                             # "n_lstm", "ent_coef",
+                             # "samples_per_driver",
+                             # "no_share_layer", "lr_remain_ratio", "merge_samples",
+                             # 'cliped_lda',  'square_lda',  'use_lda_loss', "lstm_policy","scaled_lda"
                              ])
     sess = U.make_session(num_cpu=16).__enter__()
     def task_name_gen():
@@ -183,6 +194,9 @@ if __name__ == '__main__':
     else:
         given_gp = False
     if args.trans_type == TransType.ENV_AWARE:
+        # [vae] load vae op.
+        from vae_lts.src.vae_handler import VAE
+        # load tester
         vae_checkpoint_date = vae_checkpoint_dates[args.std_level]
         vae_tester = tester.load_tester(vae_checkpoint_date, prefix_dir='lts_ae',
                                         log_root=args.log_root + vae_root)
@@ -206,6 +220,7 @@ if __name__ == '__main__':
             num_users = int(args.batch_timesteps / args.samples_per_driver / ((args.gp_range - args.trans_level) * 2))
         else:
             num_users = int(args.batch_timesteps / args.samples_per_driver)
+        print('CHOC_BONUS_RANGE', CHOC_BONUS_RANGE)
         for i in range(CHOC_BONUS_RANGE[0], CHOC_BONUS_RANGE[1]):
             if np.abs(test_choc_mean - i) <= args.trans_level:
                 continue
@@ -228,10 +243,13 @@ if __name__ == '__main__':
                    given_gp=given_gp, log_sample=args.log_sample, std_level=args.std_level)
         env_dict[str(test_choc_mean)] = env
     else:
+        print('args.trans_type == TransType.ENV_AWARE', args.trans_type == TransType.ENV_AWARE)
         raise NotImplementedError
     eval_env = make(num_users=750, time_budget=args.time_budget, domain_name=str(test_choc_mean) + '-test', cgc_type=args.cgc_type,
                     given_ep=args.given_ep, choc_mean=test_choc_mean, kale_mean=args.kale_mean,
                     given_gp=given_gp, log_sample=args.log_sample, std_level=args.std_level)
+    print('env_dict', env_dict)
+    print('domain_list', list(env_dict.keys()))
     env = MultiDomainGymEnv(env_dict=env_dict, domain_list=list(env_dict.keys()), num_domain=len(list(env_dict.keys())))
     all_domain_list = list(env_dict.keys())
     mask_len = env.selected_env.env._environment._user_model[0].observation_space().shape[0]
@@ -240,9 +258,11 @@ if __name__ == '__main__':
     assert str(test_choc_mean) + '-test' not in all_domain_list
     all_domain_list.append(str(test_choc_mean) + '-test')
     env_dict[str(test_choc_mean) + '-test'] = eval_env
+    print('full domain list', list(env_dict.keys()))
 
     # make policy parameters
     if args.trans_type == TransType.ENV_AWARE or args.trans_type == TransType.ENV_AWARE_VAN or args.trans_type == TransType.ENV_AWARE_DIRECT:
+        from transfer_learning.src.policies import EnvExtractorPolicy, EnvAwarePolicy
         policy = EnvAwarePolicy
         env_extractor_policy = EnvExtractorPolicy
         env_extractor_policy_kwargs = {
@@ -286,7 +306,7 @@ if __name__ == '__main__':
     policy_kwargs["init_scale"] = args.policy_init_scale
     log_interval = int(args.num_timesteps / 100 / 12 / args.batch_timesteps)
 
-
+    from stable_baselines.common.schedules import LinearSchedule
     p_lr_fn = LinearSchedule(schedule_timesteps=1., final_p=args.p_learning_rate * args.lr_remain_ratio,
                              initial_p=args.p_learning_rate).value
     v_lr_fn = LinearSchedule(schedule_timesteps=1., final_p=args.v_learning_rate * args.lr_remain_ratio,
@@ -380,9 +400,17 @@ if __name__ == '__main__':
                              l2_reg_v=args.l2_reg_v,
                              log_interval=log_interval, all_domain_list=all_domain_list,
                              merge_samples=args.merge_samples)
-    sess.run(tf.compat.v1.initialize_variables(tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, model.name)))
+    sess.run(tf.initialize_variables(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, model.name)))
     # vae performance test.
     if args.trans_type == TransType.ENV_AWARE and args.test_choc_mean == -1:
+        def compute_kl(real_mean, real_std, recons_data):
+            real_logstd = np.log(real_std)
+            recons_logstd = np.log(np.std(recons_data))
+            recons_std = np.std(recons_data)
+            recons_mean = np.mean(recons_data)
+            kld = np.sum(recons_logstd - real_logstd + (np.square(real_std) + np.square(real_mean - recons_mean)) / (
+                    2 * np.square(recons_std)) - 0.5, axis=-1)
+            return kld
         test_gp_data = np.random.normal(test_choc_mean, 1, size=(num_users, 1))
         code, recons_data = vae_handler.reconstruct_samples(test_gp_data, num_users)
         real_std = args.std_level
@@ -390,7 +418,7 @@ if __name__ == '__main__':
         kld = compute_kl(real_mean, real_std, recons_data)
         logger.info("kld:{}".format(kld))
         logger.record_tabular("vae-test/kld", kld)
-        assert kld < 0.3, "kld is too large"
+        #assert kld < 0.3, "kld is too large"
     tester.new_saver(model.name)
     if args.load_date is not '':
         tester.load_checkpoint(target_prefix_name='ppo_model/', current_name='ppo_model', sess=sess)

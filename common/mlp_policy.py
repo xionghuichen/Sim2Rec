@@ -8,7 +8,7 @@ from tqdm import tqdm
 import baselines.common.tf_util as U
 from baselines.common.mpi_running_mean_std import RunningMeanStd
 from baselines.common.distributions import make_pdtype
-from stable_baselines.acktr.utils import dense
+from baselines.acktr.utils import dense
 from common import logger
 from common.tester import tester
 from common.data_info import CouponActionInfo

@@ -14,6 +14,6 @@ COPY_DIR_NAME = ['common',
                  # 'simrl/cpi_demer',
                  #'vae/src',
                  #"vae_rdp/src",
-                 #"vae_rdp_20/src",
-                 'transfer_learning/src']
-                 #'ppo2']
+                #"vae_rdp_20/src",
+                 'transfer_learning/src',
+                 'ppo2']

@@ -285,7 +285,7 @@ def make(num_users, domain_name, doc_size=30, choc_mean=5.0, kale_mean=4.0, time
 if __name__ == '__main__':
     doc_size = 30
     num_users = 10
-    lts_gym_env = make(num_users, domain_name='1', doc_size=doc_size)
+    lts_gym_env = make(num_users, doc_size=doc_size)
     observation_0 = lts_gym_env.reset()
     print('Observation 0 {}'.format(observation_0))
 

@@ -83,8 +83,12 @@ def box_concate(box1, box2):
     import gym
     assert isinstance(box1, gym.spaces.Box) and isinstance(box2, gym.spaces.Box)
     assert box1.dtype == box2.dtype
-    low = np.concatenate([box1.low, box2.low])
-    high = np.concatenate([box1.high, box2.high])
+    #print('box1.low', box1.low)
+    #print('box1.high', box1.high)
+    #print('box2.low', box2.low)
+    #print('box2.high', box2.high)
+    low = np.concatenate([box1.low, box2.low], axis=1)
+    high = np.concatenate([box1.high, box2.high], axis=1)
     return gym.spaces.Box(low=low, high=high, dtype=box1.dtype, )
 
 if __name__ == '__main__':

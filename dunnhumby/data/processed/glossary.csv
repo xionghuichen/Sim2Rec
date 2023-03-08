@@ -1,0 +1,25 @@
+,VARIABLE NAME,TABLE,DESCRIPTION
+0,ADDRESS_CITY_NAME,store lookup,city
+1,ADDRESS_STATE_PROV_CODE,store lookup,state
+2,AVG_WEEKLY_BASKETS,store lookup,average weekly baskets sold in the store
+3,BASE_PRICE,data,base price of item
+4,MANUFACTURER,products lookup,manufacturer
+5,CATEGORY,products lookup,category of product
+6,DESCRIPTION,products lookup,prodcut description
+7,DISPLAY,data,product was a part of in-store promotional display
+8,FEATURE,data,product was in in-store circular
+9,HHS,data,# of purchasing households
+10,MSA_CODE,store lookup,(Metropolitan Statistical Area) geographic region with a high core population density and close economic ties throughout the surrounding areas
+11,PARKING_SPACE_QTY,store lookup,number of parking spaces in the store parking lot
+12,PRICE,data,actual amount charged for the product at shelf
+13,WEEK_END_DATE,data,week ending date
+14,SALES_AREA_SIZE_NUM,store lookup,square footage of store
+15,STORE_APPEAL,store lookup,Retailer's designated store appeal
+16,SPEND,data,"total spend (i.e., $ sales)"
+17,STORE_NUM,"data, store lookup",store number
+18,SUB_CATEGORY,products lookup,sub-category of product
+19,TPR_ONLY,data,"temporary price reduction only (i.e., shelf tag only, product was reduced in price but not on display or in an advertisment)"
+20,UNITS,data,units sold
+21,UPC,"data, products lookup",(Universal Product Code) product specific identifier
+22,VISITS,data,number of unique purchases (baskets) that included the product
+23,PRODUCT_SIZE,products lookup,package size or quantity of product

@@ -290,9 +290,9 @@ class Tester(object):
 
     def dict_to_table_text_summary(self, input_dict, name):
         import tensorflow as tf
-        with tf.compat.v1.Session() as sess:
-            to_tensor = [tf.compat.v1.convert_to_tensor([k, str(v)]) for k, v in input_dict.items()]
-            return sess.run(tf.compat.v1.summary.text(name, tf.stack(to_tensor)))
+        with tf.Session() as sess:
+            to_tensor = [tf.convert_to_tensor([k, str(v)]) for k, v in input_dict.items()]
+            return sess.run(tf.summary.text(name, tf.stack(to_tensor)))
 
     def print_large_memory_variable(self):
         import sys
@@ -318,10 +318,10 @@ class Tester(object):
     def new_saver(self, var_prefix):
         if self.do_save_checkpoint:
             import tensorflow as tf
-            var_list = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.GLOBAL_VARIABLES, var_prefix)
+            var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, var_prefix)
             logger.info("save variable :")
             self.print_var_list(var_list)
-            self.saver = tf.compat.v1.train.Saver(var_list=var_list, max_to_keep=self.max_to_keep, filename=self.checkpoint_dir, save_relative_paths=True)
+            self.saver = tf.train.Saver(var_list=var_list, max_to_keep=self.max_to_keep, filename=self.checkpoint_dir, save_relative_paths=True)
 
     def load_checkpoint(self, target_prefix_name, current_name, sess, checkpoint_dir=None):
         import tensorflow as tf
@@ -374,7 +374,7 @@ class Tester(object):
     def save_checkpoint(self, iters_so_far):
         import tensorflow as tf
         if self.do_save_checkpoint:
-            self.saver.save(tf.compat.v1.get_default_session(), self.checkpoint_dir + 'checkpoint', global_step=iters_so_far)
+            self.saver.save(tf.get_default_session(), self.checkpoint_dir + 'checkpoint', global_step=iters_so_far)
 
     def auto_parse_info(self):
         return '&'.join(self.hyper_param_record)
@@ -522,8 +522,8 @@ class Tester(object):
             for data, text in zip(datas, texts):
                 color = colors[index % len(colors)]
                 plt.scatter(data[:, 0], data[:, 1], color=color, marker='x', alpha=0.2)
-                plt.annotate(s=str(text), xy=data.mean(axis=0), color=color)
-                #plt.annotate(text=str(text), xy=data.mean(axis=0), color=color)
+                #plt.annotate(s=str(text), xy=data.mean(axis=0), color=color)
+                plt.annotate(text=str(text), xy=data.mean(axis=0), color=color)
                 index += 1
             texts = []
             texts.append(plt.xlabel(xlabel, fontsize=15))

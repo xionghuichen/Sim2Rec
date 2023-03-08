@@ -134,6 +134,7 @@ class PPO2(ActorCriticRLModel):
                 self.n_cities = len(self.env.domain_list)
             else:
                 self.n_cities = 1
+            print('self.n_envs', self.n_envs)
             self.n_batch = self.n_envs * self.n_steps * self.n_cities
 
             self.graph = tf.get_default_graph()
@@ -351,6 +352,9 @@ class PPO2(ActorCriticRLModel):
 
         advs = returns - values
         advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+        print('obs.shape', obs.shape)
+        print('actions.shape', actions.shape)
+        print('advs.shape', advs.shape)
         td_map = {self.train_model.obs_ph: obs, self.action_ph: actions,
                   self.advs_ph: advs, self.rewards_ph: returns,
                   self.v_learning_rate_ph: v_learning_rate, self.p_learning_rate_ph: p_learning_rate,
@@ -390,8 +394,8 @@ class PPO2(ActorCriticRLModel):
                         [self.summary, self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._v_train, self._g_train],
                         td_map)
 
-            if  update % self.log_interval == 0:
-                tester.add_summary(summary, 'input_info-' + self.env.domain, simple_val=True, freq=0)
+            #if  update % self.log_interval == 0:
+            #    tester.add_summary(summary, 'input_info-' + self.env.domain, simple_val=True, freq=0)
         else:
             policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _, _ = self.sess.run(
                 [self.pg_loss, self.vf_loss, self.entropy, self.approxkl, self.clipfrac, self._v_train, self._g_train], td_map)
@@ -436,6 +440,8 @@ class PPO2(ActorCriticRLModel):
                     keep_did = True
                 obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward = runner.run(keep_did=keep_did,
                                                                                                              epoch=update, deterministic=False)
+                obs = obs.reshape([self.env.time_budget, -1 , 13])
+                print('runner return obs.shape', obs.shape)
                 self.num_timesteps += self.n_batch
                 tester.time_step_holder.set_time(self.num_timesteps)
 
@@ -487,7 +493,7 @@ class PPO2(ActorCriticRLModel):
                     logger.logkv('info/time_elapsed', t_start - t_first_start)
                     for (loss_val, loss_name) in zip(loss_vals, self.loss_names):
                         logger.logkv("loss-{}/{}".format(self.env.domain, loss_name), loss_val)
-                    logger.dumpkvs()
+                    #logger.dumpkvs()
                 # evaluation
                 if self.verbose >= 1 and (update % (log_interval * 4) == 0 or update == 1):
                     def eval_func(test_env, test_runner, tag, save_data=False):
@@ -501,14 +507,16 @@ class PPO2(ActorCriticRLModel):
                         eval_func(self.env, runner, 'train')
                     # if update % (log_interval * 12) == 0 or update == 1:
                     #     tester.save_checkpoint(self.num_timesteps)
-                    logger.dumpkvs()
+                    #logger.dumpkvs()
             return self
 
     def record_distribution(self, acs, rews, satisfication, domain):
         distri_summary = self.sess.run(self.domain_summary_dict[domain], feed_dict={
-            self.acs_ph: acs.reshape(-1, ),
+            #self.acs_ph: acs.reshape(-1, ),
+            self.acs_ph: np.zeros(acs.shape).reshape(-1,),
             self.rew_ph: rews.reshape(-1, ),
-            self.satisfication_ph: satisfication.reshape(-1, ),
+            #self.satisfication_ph: satisfication.reshape(-1, ),
+            self.satisfication_ph: np.zeros(satisfication.shape).reshape(-1,),
         })
         tester.add_summary(distri_summary, domain + '-' + 'dis')
 
