@@ -3,6 +3,7 @@ The official code for "A Simulator-based Decision-Making Approach to Optimize Re
 
 Note: Full code and docs are ongoing, and will be released soon after completion.
 
+The data and proprecessing methods about the dunnhumby dataset are povided in the folder ```dunnhumby```.
 # quickstart
 
 learn SADAE
@@ -17,3 +18,5 @@ learn Sim2Rec
 cd lts/src
 python run_lts.py
 ```
+
+
