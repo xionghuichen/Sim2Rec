@@ -1,5 +1,5 @@
 # Sim2Rec
-The official code for "A Simulator-based Decision-Making Approach to Optimize Real-World Long-term User Engagement in Sequential Recommender Systems". 
+The official code for "Sim2Rec: A Simulator-based Decision-making Approach to Optimize Real-World Long-term User Engagement in Sequential Recommender Systems". 
 
 Note: Full code is released and the docs are ongoing, and will be released soon after completion.
 
